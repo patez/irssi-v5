@@ -30,6 +30,8 @@ use session::Manager as SessionManager;
 use soju::Manager as SojuManager;
 use store::Store;
 
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -166,84 +168,106 @@ async fn handle_provision(
     Ok(Json(json!({"ok": true})))
 }
 
-/// Proxy all requests under /terminal/* to the user's ttyd instance.
-/// Handles both HTTP (static assets) and WebSocket upgrades.
-/// Routes: GET /terminal  and  GET /terminal/*path
-async fn handle_terminal(
+// ── Router changes ────────────────────────────────────────────────────────────
+// Replace the three /terminal routes with explicit WS + HTTP routes:
+//
+//   .route("/terminal/ws",    get(handle_terminal_ws))
+//   .route("/terminal/",      get(handle_terminal_http))
+//   .route("/terminal/*path", get(handle_terminal_http))
+//
+// ttyd's JS client connects to /terminal/ws — so the iframe src stays /terminal/
+// but the WS endpoint is explicit and axum can negotiate the upgrade cleanly.
+
+// ── WebSocket handler ─────────────────────────────────────────────────────────
+
+/// Dedicated WS upgrade handler — axum extracts `WebSocketUpgrade` before
+/// your code runs, so the HTTP→WS handshake is already done when we call
+/// connect_async to ttyd. No more race between upgrade negotiation and the
+/// upstream connect.
+async fn handle_terminal_ws(
     State(state): State<AppState>,
     headers: HeaderMap,
-    req: axum::extract::Request,
+    ws: axum::extract::ws::WebSocketUpgrade,
 ) -> Result<Response, AppError> {
-    info!("handle_terminal: {}", req.uri().path());
     let user = state.authenticate(&headers).await?;
 
     let port = state
         .sessions
-        .get_or_create(&user.username, &state.cfg.sessions_dir.join(&user.username))
+        .get_or_create(
+            &user.username,
+            &state.cfg.sessions_dir.join(&user.username),
+        )
         .await
         .map_err(|e| {
             error!("session.get_or_create({}): {:#}", user.username, e);
             AppError::Internal(e)
         })?;
 
-    proxy_ttyd(port, req).await
+    // Build upstream WS request to ttyd
+    let ws_url = format!("ws://127.0.0.1:{}/ws", port);
+    info!("WS proxy for {}: → {}", user.username, ws_url);
+
+    let origin = format!("http://127.0.0.1:{}", port);
+
+    let mut tung_req = ws_url
+        .as_str()
+        .into_client_request()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bad ws url: {}", e)))?;
+
+    tung_req.headers_mut().insert(
+        "origin",
+        origin
+            .parse()
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("bad origin: {}", e)))?,
+    );
+    tung_req.headers_mut().insert(
+        "sec-websocket-protocol",
+        "tty".parse().unwrap(),
+    );
+
+    let (upstream, _) = tokio_tungstenite::connect_async(tung_req)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("ws connect ttyd: {}", e)))?;
+
+    Ok(ws
+        .protocols(["tty"])
+        .on_upgrade(move |client| splice_ws(client, upstream))
+        .into_response())
 }
 
-// ── ttyd proxy ────────────────────────────────────────────────────────────────
+// ── HTTP proxy handler ────────────────────────────────────────────────────────
 
-async fn proxy_ttyd(port: u16, req: axum::extract::Request) -> Result<Response, AppError> {
-    // Strip /terminal prefix so ttyd sees paths rooted at /
+/// Proxies ttyd's static assets (HTML, JS, CSS) — no WS logic here at all.
+async fn handle_terminal_http(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    req: axum::extract::Request,
+) -> Result<Response, AppError> {
+    let user = state.authenticate(&headers).await?;
+
+    let port = state
+        .sessions
+        .get_or_create(
+            &user.username,
+            &state.cfg.sessions_dir.join(&user.username),
+        )
+        .await
+        .map_err(|e| {
+            error!("session.get_or_create({}): {:#}", user.username, e);
+            AppError::Internal(e)
+        })?;
+
     let path = req.uri().path();
     let stripped = path.strip_prefix("/terminal").unwrap_or(path);
     let stripped = if stripped.is_empty() { "/" } else { stripped };
-    let query = req.uri().query().map(|q| format!("?{}", q)).unwrap_or_default();
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{}", q))
+        .unwrap_or_default();
 
-    let is_ws = req
-        .headers()
-        .get(axum::http::header::UPGRADE)
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_lowercase().contains("websocket"))
-        .unwrap_or(false);
-
-    if is_ws {
-        let ws_url = format!("ws://127.0.0.1:{}{}{}", port, stripped, query);
-        info!("WS proxy: {} → {}", path, ws_url);
-
-        // Set Origin and subprotocol headers for the upstream ttyd connection.
-        // ttyd checks Origin matches its own host, and requires the "tty" subprotocol.
-        let origin = format!("http://127.0.0.1:{}", port);
-        let request = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(&ws_url)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("bad ws url: {}", e)))?;
-        let (mut req_parts, _) = request.into_parts();
-        req_parts.headers.insert(
-            "origin",
-            origin.parse().map_err(|e| AppError::Internal(anyhow::anyhow!("bad origin: {}", e)))?,
-        );
-        req_parts.headers.insert(
-            "sec-websocket-protocol",
-            "tty".parse().map_err(|e| AppError::Internal(anyhow::anyhow!("bad protocol: {}", e)))?,
-        );
-        let request = tokio_tungstenite::tungstenite::handshake::client::Request::from_parts(req_parts, ());
-
-        let (upstream, _) = tokio_tungstenite::connect_async(request)
-            .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("ws connect ttyd: {}", e)))?;
-
-        let upgrade = axum::extract::ws::WebSocketUpgrade::from_request(req, &())
-            .await
-            .map_err(|_| AppError::Internal(anyhow::anyhow!("ws upgrade failed")))?;
-
-        // Echo the tty subprotocol back — ttyd's JS checks for this and
-        // silently drops the connection if the server doesn't confirm it.
-        return Ok(upgrade
-            .protocols(["tty"])
-            .on_upgrade(move |client| splice_ws(client, upstream))
-            .into_response());
-    }
-
-    // Regular HTTP — proxy ttyd's static assets using reqwest
     let uri_str = format!("http://127.0.0.1:{}{}{}", port, stripped, query);
-    info!("HTTP proxy: {} → {}", path, uri_str);
+    info!("HTTP proxy for {}: {} → {}", user.username, path, uri_str);
 
     let client = reqwest::Client::new();
     let resp = client
@@ -260,7 +284,9 @@ async fn proxy_ttyd(port: u16, req: axum::extract::Request) -> Result<Response, 
         builder = builder.header(k, v);
     }
 
-    let body = resp.bytes().await
+    let body = resp
+        .bytes()
+        .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("proxy body error: {}", e)))?;
 
     builder
@@ -268,6 +294,25 @@ async fn proxy_ttyd(port: u16, req: axum::extract::Request) -> Result<Response, 
         .map_err(|e| AppError::Internal(anyhow::anyhow!("response build error: {}", e)))
 }
 
+// ── Router snippet ────────────────────────────────────────────────────────────
+//
+// let app = Router::new()
+//     .route("/api/me",              get(handle_me))
+//     .route("/api/terminal",        get(handle_provision))
+//     .route("/terminal/ws",         get(handle_terminal_ws))   // ← explicit WS
+//     .route("/terminal/",           get(handle_terminal_http))
+//     .route("/terminal/*path",      get(handle_terminal_http))
+//     .route("/api/session/clear",   post(handle_clear_session))
+//     // ... admin routes ...
+//     .fallback_service(ServeDir::new(&cfg.public_dir))
+//     .layer(TraceLayer::new_for_http())
+//     .with_state(state);
+//
+// Also remove the old `handle_terminal` and `proxy_ttyd` functions entirely.
+// The `splice_ws` function stays unchanged.
+//
+// NOTE: you also need to add this import at the top:
+//   use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 /// Bidirectional WebSocket splice: browser ↔ ttyd
 async fn splice_ws(
     client: axum::extract::ws::WebSocket,
@@ -482,11 +527,12 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         // User API
+        .route("/terminal/ws",    get(handle_terminal_ws))
         .route("/api/me", get(handle_me))
         .route("/api/terminal", get(handle_provision))
-        .route("/token", get(handle_terminal))
-        .route("/terminal/", get(handle_terminal))
-        .route("/terminal/*path", get(handle_terminal))
+        .route("/token", get(handle_token))
+        .route("/terminal/", get(handle_terminal_http))
+        .route("/terminal/*path", get(handle_terminal_http))
         .route("/api/session/clear", post(handle_clear_session))
         // Admin API
         .route("/api/admin/users", get(handle_admin_users))
@@ -509,6 +555,16 @@ async fn main() -> Result<()> {
         .await?;
 
     Ok(())
+}
+
+// Handler — CF Access lands here after OAuth, just validate + redirect home
+async fn handle_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    // Validates the JWT (ensures the CF cookie is good), then redirects to /
+    let _user = state.authenticate(&headers).await?;
+    Ok(axum::response::Redirect::to("/").into_response())
 }
 
 async fn shutdown_signal() {
