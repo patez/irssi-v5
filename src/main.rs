@@ -273,6 +273,7 @@ async fn handle_terminal_http(
     let client = reqwest::Client::new();
     let resp = client
         .get(&uri_str)
+        .header("cookie", "")  // don't forward browser cookies to ttyd
         .send()
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("http proxy error: {}", e)))?;
