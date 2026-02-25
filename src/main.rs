@@ -261,6 +261,13 @@ async fn handle_terminal_http(
     let path = req.uri().path();
     let stripped = path.strip_prefix("/terminal").unwrap_or(path);
     let stripped = if stripped.is_empty() { "/" } else { stripped };
+    // At the top of handle_terminal_http, before the proxy logic:
+    if stripped == "/token" {
+    return Ok(axum::response::Response::builder()
+        .status(200)
+        .body(axum::body::Body::empty())
+        .unwrap());
+    }
     let query = req
         .uri()
         .query()
@@ -273,7 +280,6 @@ async fn handle_terminal_http(
     let client = reqwest::Client::new();
     let resp = client
         .get(&uri_str)
-        .header("cookie", "")  // don't forward browser cookies to ttyd
         .send()
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("http proxy error: {}", e)))?;
