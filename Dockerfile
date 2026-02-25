@@ -54,7 +54,7 @@ ENV LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8 \
     LANGUAGE=en_US:en
 
-RUN useradd -r -m -s /bin/bash -u 1010 irssiuser
+RUN useradd -r -m -s /bin/bash -u 1000 irssiuser
 
 WORKDIR /app
 
