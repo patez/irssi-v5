@@ -528,9 +528,10 @@ async fn main() -> Result<()> {
     let app = Router::new()
         // User API
         .route("/terminal/ws",    get(handle_terminal_ws))
+        .route("/terminal/token", get(handle_terminal_ws))
         .route("/api/me", get(handle_me))
         .route("/api/terminal", get(handle_provision))
-        .route("/token", get(handle_token))
+        //.route("/token", get(handle_token))
         .route("/terminal/", get(handle_terminal_http))
         .route("/terminal/*path", get(handle_terminal_http))
         .route("/api/session/clear", post(handle_clear_session))
