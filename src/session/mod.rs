@@ -81,7 +81,6 @@ impl Manager {
             .args([
                 "--port", &port.to_string(),
                 "--interface", "127.0.0.1",
-                "--once",
                 "--writable",
                 "irssi", "--home", &home_str,
             ])
