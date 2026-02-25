@@ -224,6 +224,7 @@ async fn handle_terminal_ws(
         "sec-websocket-protocol",
         "tty".parse().unwrap(),
     );
+    tung_req.headers_mut().remove("cookie");
 
     let (upstream, _) = tokio_tungstenite::connect_async(tung_req)
         .await
