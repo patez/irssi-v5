@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+    <title>IRC</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+
+    <!-- Admin panel -->
+    <div id="admin-panel" class="modal"></div>
+
+    <!-- Terminal — ttyd serves its own xterm.js UI here -->
+    <div id="terminal-container">
+        <iframe id="terminal-frame" src="" frameborder="0" allowfullscreen></iframe>
+    </div>
+
+    <!-- Status bar -->
+    <div id="status-bar">
+        <div id="status">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-text">Connecting...</span>
+            <span id="user-info"></span>
+            <span id="admin-link" style="display:none">Admin</span>
+        </div>
+        <div id="actions">
+            <button class="btn" id="btn-reset" title="Reset session">Reset</button>
+        </div>
+    </div>
+
+    <script src="/js/admin.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>

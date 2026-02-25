@@ -1,0 +1,80 @@
+name: irssi-v5
+
+services:
+
+  soju:
+    image: alpine:3.20
+    container_name: soju
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache wget
+        wget -qO- https://soju.im/release/soju-0.8.0-linux-amd64.tar.gz \
+          | tar -xz -C /usr/local/bin --strip-components=1
+        exec soju -config /etc/soju/config
+    restart: always
+    volumes:
+      - ./soju.config:/etc/soju/config:ro
+      - soju-data:/var/lib/soju
+      - soju-socket:/soju
+    networks:
+      - internal
+    expose:
+      - "6667"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: irssi-v5:latest
+    container_name: irssi-v5
+    restart: always
+    expose:
+      - "3001"
+    env_file:
+      - .env
+    environment:
+      PORT:           "3001"
+      BASE_URL:       "${BASE_URL}"
+      CF_AUD:         "${CF_AUD}"
+      CF_TEAM_DOMAIN: "${CF_TEAM_DOMAIN}"
+      ADMIN_USERS:    "${ADMIN_USERS}"
+      DEV_MODE:       "${DEV_MODE:-false}"
+      DEV_USER:       "${DEV_USER:-devuser}"
+      SOJU_ADDR:      "soju:6667"
+      SOJU_SOCKET:    "/soju/soju.sock"
+      IRC_SERVER:     "${IRC_SERVER:-irc.libera.chat}"
+      IRC_PORT:       "${IRC_PORT:-6697}"
+      PUBLIC_DIR:     "./public"
+      RUST_LOG:       "irssi_v5=info,warn"
+      LANG:           en_US.UTF-8
+      LC_ALL:         en_US.UTF-8
+    volumes:
+      - irssi-v5-data:/data
+      - soju-socket:/soju
+    depends_on:
+      - soju
+    networks:
+      - web
+      - internal
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  irssi-v5-data:
+  soju-data:
+  soju-socket:
+
+networks:
+  web:
+    external: true
+  internal:
+    driver: bridge

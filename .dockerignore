@@ -1,0 +1,13 @@
+target/
+.env
+.env.*
+data/
+*.db
+*.log
+.git/
+.gitignore
+*.md
+compose.yaml
+soju.config
+.DS_Store
+.vscode/
