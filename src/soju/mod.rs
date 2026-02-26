@@ -1,32 +1,33 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
 use rand::Rng;
-use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
 use tracing::info;
 
 pub struct Manager {
-    soju_config: String,
+    socket_path: PathBuf,
     sessions_dir: PathBuf,
     soju_addr: String,
     irc_server: String,
     irc_port: u16,
-    /// Tracks users provisioned in this process run (avoids redundant sojuctl calls)
+    /// Tracks users provisioned in this process run (avoids redundant calls)
     provisioned: Arc<DashMap<String, ()>>,
 }
 
 impl Manager {
     pub fn new(
-        soju_config: String,
+        socket_path: PathBuf,
         sessions_dir: PathBuf,
         soju_addr: String,
         irc_server: String,
         irc_port: u16,
     ) -> Arc<Self> {
         Arc::new(Self {
-            soju_config,
+            socket_path,
             sessions_dir,
             soju_addr,
             irc_server,
@@ -53,13 +54,12 @@ impl Manager {
 
         let password = random_password();
 
-        // Create soju user
+        // Create soju user via admin unix socket
         let result = self
-            .sojuctl(&[
-                "user", "create",
-                "-username", username,
-                "-password", &password,
-            ])
+            .bouncer_serv(&format!(
+                "user create -username {} -password {}",
+                username, password
+            ))
             .await;
 
         if let Err(e) = result {
@@ -73,13 +73,10 @@ impl Manager {
         let irc_addr = format!("ircs://{}:{}", self.irc_server, self.irc_port);
 
         let result = self
-            .sojuctl(&[
-                "network", "create",
-                "-user", username,
-                "-name", &network_name,
-                "-addr", &irc_addr,
-                "-nick", username,
-            ])
+            .bouncer_serv(&format!(
+                "network create -user {} -name {} -addr {} -nick {}",
+                username, network_name, irc_addr, username
+            ))
             .await;
 
         if let Err(e) = result {
@@ -132,7 +129,7 @@ settings = {{
         self.provisioned.remove(username);
 
         let _ = self
-            .sojuctl(&["user", "delete", "-username", username])
+            .bouncer_serv(&format!("user delete {}", username))
             .await;
 
         let user_dir = self.sessions_dir.join(username);
@@ -144,20 +141,75 @@ settings = {{
         Ok(())
     }
 
-    async fn sojuctl(&self, args: &[&str]) -> Result<()> {
-    let output = Command::new("podman")
-        .args(["exec", "soju", "sojuctl", "-config", &self.soju_config])
-        .args(args)
-        .output()
-        .await
-        .context("failed to run sojuctl")?;
+    /// Send a BouncerServ command via the soju admin unix socket.
+    /// Connects as an anonymous admin client, sends the command, reads the response.
+    async fn bouncer_serv(&self, cmd: &str) -> Result<()> {
+        let stream = UnixStream::connect(&self.socket_path)
+            .await
+            .with_context(|| format!("failed to connect to soju socket {:?}", self.socket_path))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("sojuctl error: {}", stderr.trim()));
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // IRC handshake — admin socket accepts any nick/user
+        writer
+            .write_all(b"NICK soju-admin\r\nUSER soju-admin 0 * :soju-admin\r\n")
+            .await
+            .context("failed to send IRC handshake")?;
+
+        // Wait for 001 (welcome) before sending commands
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = reader.read_line(&mut line).await.context("read error")?;
+            if n == 0 {
+                return Err(anyhow!("soju socket closed before welcome"));
+            }
+            if line.contains("001") {
+                break;
+            }
+            if line.starts_with("ERROR") {
+                return Err(anyhow!("soju socket error: {}", line.trim()));
+            }
+        }
+
+        // Send the BouncerServ command
+        let msg = format!("PRIVMSG BouncerServ :{}\r\n", cmd);
+        writer
+            .write_all(msg.as_bytes())
+            .await
+            .context("failed to send BouncerServ command")?;
+
+        // Read response — look for a NOTICE from BouncerServ
+        let mut response = String::new();
+        loop {
+            response.clear();
+            let n = reader
+                .read_line(&mut response)
+                .await
+                .context("read error waiting for response")?;
+            if n == 0 {
+                break;
+            }
+            let r = response.trim();
+            if r.contains("NOTICE") && r.contains("BouncerServ") {
+                if r.to_lowercase().contains("error")
+                    || r.to_lowercase().contains("unknown")
+                    || r.to_lowercase().contains("failed")
+                {
+                    return Err(anyhow!("BouncerServ error: {}", r));
+                }
+                break;
+            }
+            if r.starts_with("PING") {
+                let pong = format!("PONG {}\r\n", &r[5..]);
+                writer.write_all(pong.as_bytes()).await.ok();
+            }
+        }
+
+        writer.write_all(b"QUIT\r\n").await.ok();
+        Ok(())
     }
-    Ok(())
-}
 }
 
 fn random_password() -> String {
