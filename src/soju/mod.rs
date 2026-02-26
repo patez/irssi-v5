@@ -74,8 +74,9 @@ impl Manager {
 
         let result = self
             .sojuctl(&[
+                "user", "run",
+                "-name", username,
                 "network", "create",
-                "-user", username,
                 "-name", &network_name,
                 "-addr", &irc_addr,
                 "-nick", username,
