@@ -1,0 +1,21 @@
+FROM golang:1.23-alpine AS builder
+
+RUN apk add --no-cache git make gcc musl-dev sqlite-dev
+
+RUN git clone --depth 1 --branch v0.9.0 https://codeberg.org/emersion/soju /src
+
+WORKDIR /src
+
+RUN go build -tags=libsqlite3 ./cmd/soju && \
+    go build -tags=libsqlite3 ./cmd/sojuctl
+
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates sqlite-libs
+
+COPY --from=builder /src/soju    /usr/local/bin/soju
+COPY --from=builder /src/sojuctl /usr/local/bin/sojuctl
+
+VOLUME ["/var/lib/soju", "/soju"]
+
+CMD ["soju", "-config", "/etc/soju/config"]

@@ -3,15 +3,10 @@ name: irssi-v5
 services:
 
   soju:
-    image: alpine:3.20
+    build:
+      context: .
+      dockerfile: Dockerfile.soju
     container_name: soju
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        apk add --no-cache wget
-        wget -qO- https://soju.im/release/soju-0.8.0-linux-amd64.tar.gz \
-          | tar -xz -C /usr/local/bin --strip-components=1
-        exec soju -config /etc/soju/config
     restart: always
     volumes:
       - ./soju.config:/etc/soju/config:ro
@@ -31,8 +26,6 @@ services:
     restart: always
     expose:
       - "3001"
-    ports:
-      - "3001:3001"
     env_file:
       - .env
     environment:
