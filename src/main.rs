@@ -518,7 +518,7 @@ async fn main() -> Result<()> {
     let sessions = SessionManager::new(cfg.ttyd_base_port);
 
     let soju = SojuManager::new(
-        cfg.soju_socket.clone(),
+        cfg.soju_config.clone(),
         cfg.sessions_dir.clone(),
         cfg.soju_addr.clone(),
         cfg.irc_server.clone(),

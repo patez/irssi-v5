@@ -23,6 +23,7 @@ pub struct Config {
     // Soju
     pub soju_addr: String,
     pub soju_socket: PathBuf,
+    pub soju_config: String,
 
     // IRC upstream
     pub irc_server: String,
@@ -74,6 +75,7 @@ impl Config {
             admin_users,
             soju_addr: env_var("SOJU_ADDR", "soju:6667"),
             soju_socket: PathBuf::from(env_var("SOJU_SOCKET", "/soju/soju.sock")),
+            soju_config: env_var("SOJU_CONFIG", "/etc/soju/config"),
             irc_server: env_var("IRC_SERVER", "irc.libera.chat"),
             irc_port: env_var("IRC_PORT", "6697").parse().context("invalid IRC_PORT")?,
             ttyd_base_port: env_var("TTYD_BASE_PORT", "7100").parse().context("invalid TTYD_BASE_PORT")?,

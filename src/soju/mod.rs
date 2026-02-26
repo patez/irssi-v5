@@ -1,14 +1,14 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 use rand::Rng;
 use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct Manager {
-    socket_path: PathBuf,
+    soju_config: String,
     sessions_dir: PathBuf,
     soju_addr: String,
     irc_server: String,
@@ -19,14 +19,14 @@ pub struct Manager {
 
 impl Manager {
     pub fn new(
-        socket_path: PathBuf,
+        soju_config: String,
         sessions_dir: PathBuf,
         soju_addr: String,
         irc_server: String,
         irc_port: u16,
     ) -> Arc<Self> {
         Arc::new(Self {
-            socket_path,
+            soju_config,
             sessions_dir,
             soju_addr,
             irc_server,
@@ -146,8 +146,8 @@ settings = {{
 
     async fn sojuctl(&self, args: &[&str]) -> Result<()> {
         let output = Command::new("sojuctl")
-            .arg("-socket")
-            .arg(&self.socket_path)
+            .arg("-config")
+            .arg(&self.soju_config)
             .args(args)
             .output()
             .await
