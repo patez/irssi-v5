@@ -31,7 +31,6 @@ RUN apt-get update && apt-get install -y \
     git \
     locales \
     ca-certificates \
-    podman \
     && rm -rf /var/lib/apt/lists/*
 
 # Build ttyd from source
@@ -41,11 +40,11 @@ RUN git clone --depth 1 https://github.com/tsl0922/ttyd.git /tmp/ttyd \
     && cp /tmp/ttyd/build/ttyd /usr/local/bin/ttyd \
     && rm -rf /tmp/ttyd
 
-# Install soju + sojuctl from source
+# Build sojuctl from source
 RUN git clone --depth 1 --branch v0.9.0 https://codeberg.org/emersion/soju.git /tmp/soju \
     && cd /tmp/soju \
-    && GOFLAGS="-tags=libsqlite3" make \
-    && cp soju sojuctl /usr/local/bin/ \
+    && GOFLAGS="-tags=libsqlite3" go build ./cmd/sojuctl \
+    && cp sojuctl /usr/local/bin/ \
     && rm -rf /tmp/soju
 
 # UTF-8 locale

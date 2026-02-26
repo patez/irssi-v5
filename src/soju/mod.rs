@@ -1,11 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use dashmap::DashMap;
 use rand::Rng;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use tokio::process::Command;
 use tracing::info;
 
 pub struct Manager {
@@ -14,7 +13,7 @@ pub struct Manager {
     soju_addr: String,
     irc_server: String,
     irc_port: u16,
-    /// Tracks users provisioned in this process run (avoids redundant calls)
+    /// Tracks users provisioned in this process run (avoids redundant sojuctl calls)
     provisioned: Arc<DashMap<String, ()>>,
 }
 
@@ -54,12 +53,13 @@ impl Manager {
 
         let password = random_password();
 
-        // Create soju user via admin unix socket
+        // Create soju user
         let result = self
-            .bouncer_serv(&format!(
-                "user create -username {} -password {}",
-                username, password
-            ))
+            .sojuctl(&[
+                "user", "create",
+                "-username", username,
+                "-password", &password,
+            ])
             .await;
 
         if let Err(e) = result {
@@ -73,10 +73,13 @@ impl Manager {
         let irc_addr = format!("ircs://{}:{}", self.irc_server, self.irc_port);
 
         let result = self
-            .bouncer_serv(&format!(
-                "network create -user {} -name {} -addr {} -nick {}",
-                username, network_name, irc_addr, username
-            ))
+            .sojuctl(&[
+                "network", "create",
+                "-user", username,
+                "-name", &network_name,
+                "-addr", &irc_addr,
+                "-nick", username,
+            ])
             .await;
 
         if let Err(e) = result {
@@ -129,7 +132,7 @@ settings = {{
         self.provisioned.remove(username);
 
         let _ = self
-            .bouncer_serv(&format!("user delete {}", username))
+            .sojuctl(&["user", "delete", "-username", username])
             .await;
 
         let user_dir = self.sessions_dir.join(username);
@@ -141,73 +144,19 @@ settings = {{
         Ok(())
     }
 
-    /// Send a BouncerServ command via the soju admin unix socket.
-    /// Connects as an anonymous admin client, sends the command, reads the response.
-    async fn bouncer_serv(&self, cmd: &str) -> Result<()> {
-        let stream = UnixStream::connect(&self.socket_path)
+    async fn sojuctl(&self, args: &[&str]) -> Result<()> {
+        let output = Command::new("sojuctl")
+            .arg("-config")
+            .arg("/etc/soju/config")
+            .args(args)
+            .output()
             .await
-            .with_context(|| format!("failed to connect to soju socket {:?}", self.socket_path))?;
+            .context("failed to run sojuctl")?;
 
-        let (reader, mut writer) = stream.into_split();
-        let mut reader = BufReader::new(reader);
-
-        // IRC handshake — admin socket accepts any nick/user
-        writer
-            .write_all(b"NICK soju-admin\r\nUSER soju-admin 0 * :soju-admin\r\n")
-            .await
-            .context("failed to send IRC handshake")?;
-
-        // Wait for 001 (welcome) before sending commands
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let n = reader.read_line(&mut line).await.context("read error")?;
-            if n == 0 {
-                return Err(anyhow!("soju socket closed before welcome"));
-            }
-            if line.contains("001") {
-                break;
-            }
-            if line.starts_with("ERROR") {
-                return Err(anyhow!("soju socket error: {}", line.trim()));
-            }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("sojuctl error: {}", stderr.trim()));
         }
-
-        // Send the BouncerServ command
-        let msg = format!("PRIVMSG BouncerServ :{}\r\n", cmd);
-        writer
-            .write_all(msg.as_bytes())
-            .await
-            .context("failed to send BouncerServ command")?;
-
-        // Read response — look for a NOTICE from BouncerServ
-        let mut response = String::new();
-        loop {
-            response.clear();
-            let n = reader
-                .read_line(&mut response)
-                .await
-                .context("read error waiting for response")?;
-            if n == 0 {
-                break;
-            }
-            let r = response.trim();
-            if r.contains("NOTICE") && r.contains("BouncerServ") {
-                if r.to_lowercase().contains("error")
-                    || r.to_lowercase().contains("unknown")
-                    || r.to_lowercase().contains("failed")
-                {
-                    return Err(anyhow!("BouncerServ error: {}", r));
-                }
-                break;
-            }
-            if r.starts_with("PING") {
-                let pong = format!("PONG {}\r\n", &r[5..]);
-                writer.write_all(pong.as_bytes()).await.ok();
-            }
-        }
-
-        writer.write_all(b"QUIT\r\n").await.ok();
         Ok(())
     }
 }

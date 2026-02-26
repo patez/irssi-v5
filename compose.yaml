@@ -47,6 +47,7 @@ services:
     volumes:
       - irssi-v5-data:/data
       - soju-socket:/soju
+      - ./soju.config:/etc/soju/config:ro
     depends_on:
       - soju
     networks:
