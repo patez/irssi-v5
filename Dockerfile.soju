@@ -22,4 +22,4 @@ VOLUME ["/var/lib/soju", "/soju"]
 
 USER sojuuser
 
-CMD ["soju", "-config", "/etc/soju/config"]
+CMD ["sh", "-c", "soju -config /etc/soju/config & sleep 2 && chmod 777 /soju/soju.sock && wait"]
