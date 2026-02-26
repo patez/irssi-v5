@@ -521,8 +521,8 @@ async fn main() -> Result<()> {
         cfg.soju_socket.clone(),
         cfg.sessions_dir.clone(),
         cfg.soju_addr.clone(),
-        cfg.irc_server.clone(),
-        cfg.irc_port,
+        cfg.irc_addr.clone(),
+        cfg.irc_network_name.clone(),
     );
 
     let state = AppState {

@@ -23,11 +23,18 @@ pub struct Config {
     // Soju
     pub soju_addr: String,
     pub soju_socket: PathBuf,
-    pub soju_config: String,
 
-    // IRC upstream
-    pub irc_server: String,
-    pub irc_port: u16,
+    // IRC upstream — full soju address format
+    // Examples:
+    //   irc+insecure://irc.swepipe.net        plain text, default port
+    //   irc+insecure://irc.swepipe.net:6667   plain text, explicit port
+    //   ircs://irc.libera.chat                TLS, default port
+    //   ircs://irc.libera.chat:6697           TLS, explicit port
+    pub irc_addr: String,
+
+    // Human-readable network name shown in soju and irssi password
+    // e.g. "swepipe", "libera", "ircnet"
+    pub irc_network_name: String,
 
     // ttyd port range
     pub ttyd_base_port: u16,
@@ -75,9 +82,8 @@ impl Config {
             admin_users,
             soju_addr: env_var("SOJU_ADDR", "soju:6667"),
             soju_socket: PathBuf::from(env_var("SOJU_SOCKET", "/soju/soju.sock")),
-            soju_config: env_var("SOJU_CONFIG", "/etc/soju/config"),
-            irc_server: env_var("IRC_SERVER", "irc.libera.chat"),
-            irc_port: env_var("IRC_PORT", "6697").parse().context("invalid IRC_PORT")?,
+            irc_addr: env_var("IRC_ADDR", "irc+insecure://irc.libera.chat"),
+            irc_network_name: env_var("IRC_NETWORK_NAME", "libera"),
             ttyd_base_port: env_var("TTYD_BASE_PORT", "7100").parse().context("invalid TTYD_BASE_PORT")?,
             sessions_dir: data_dir.join("sessions"),
             public_dir: PathBuf::from(env_var("PUBLIC_DIR", "./public")),

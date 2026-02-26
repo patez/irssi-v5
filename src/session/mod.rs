@@ -82,7 +82,7 @@ impl Manager {
                 "--port", &port.to_string(),
                 "--interface", "127.0.0.1",
                 "--writable",
-                "irssi", "--home", &home_str,
+                "irssi", "--config", &format!("{}/config", home_str),
             ])
             .kill_on_drop(true)
             .spawn()

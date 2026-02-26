@@ -11,8 +11,15 @@ pub struct Manager {
     socket_path: PathBuf,
     sessions_dir: PathBuf,
     soju_addr: String,
-    irc_server: String,
-    irc_port: u16,
+    // Full soju IRC address, e.g:
+    //   irc+insecure://irc.swepipe.net        plain text, default port
+    //   irc+insecure://irc.swepipe.net:6667   plain text, explicit port
+    //   ircs://irc.libera.chat                TLS, default port
+    //   ircs://irc.libera.chat:6697           TLS, explicit port
+    irc_addr: String,
+    // Short name for the network, used in soju and irssi
+    // e.g. "swepipe", "libera", "ircnet"
+    irc_network_name: String,
     /// Tracks users provisioned in this process run (avoids redundant sojuctl calls)
     provisioned: Arc<DashMap<String, ()>>,
 }
@@ -22,15 +29,15 @@ impl Manager {
         socket_path: PathBuf,
         sessions_dir: PathBuf,
         soju_addr: String,
-        irc_server: String,
-        irc_port: u16,
+        irc_addr: String,
+        irc_network_name: String,
     ) -> Arc<Self> {
         Arc::new(Self {
             socket_path,
             sessions_dir,
             soju_addr,
-            irc_server,
-            irc_port,
+            irc_addr,
+            irc_network_name,
             provisioned: Arc::new(DashMap::new()),
         })
     }
@@ -43,7 +50,7 @@ impl Manager {
         }
 
         let user_dir = self.sessions_dir.join(username);
-        let config_path = user_dir.join("irssi.conf");
+        let config_path = user_dir.join("config");
 
         // Already provisioned from a previous run
         if config_path.exists() {
@@ -69,17 +76,14 @@ impl Manager {
         }
 
         // Add upstream IRC network
-        let network_name = self.irc_server.replace('.', "-");
-        let irc_addr = format!("ircs://{}:{}", self.irc_server, self.irc_port);
-
         let result = self
             .sojuctl(&[
                 "user", "run",
-        username,
-        "network", "create",
-        "-name", &network_name,
-        "-addr", &irc_addr,
-        "-nick", username,
+                username,
+                "network", "create",
+                "-name", &self.irc_network_name,
+                "-addr", &self.irc_addr,
+                "-nick", username,
             ])
             .await;
 
@@ -96,11 +100,20 @@ impl Manager {
 
         let (soju_host, soju_port) = split_addr(&self.soju_addr);
         let irssi_conf = format!(
-            r#"servers = ({{
+r#"chatnets = {{
+  {network_name} = {{
+    type = "IRC";
+    sasl_mechanism = "PLAIN";
+    sasl_username = "{username}/{network_name}";
+    sasl_password = "{password}";
+  }};
+}};
+
+servers = ({{
   address = "{soju_host}";
   port = {soju_port};
   use_ssl = no;
-  password = "{username}/{network_name}:{password}";
+  chatnet = "{network_name}";
   autoconnect = yes;
 }});
 
@@ -114,6 +127,7 @@ settings = {{
   "fe-common/core" = {{ term_charset = "UTF-8"; }};
 }};
 "#,
+            network_name = self.irc_network_name,
         );
 
         tokio::fs::write(&config_path, irssi_conf)
@@ -133,7 +147,7 @@ settings = {{
         self.provisioned.remove(username);
 
         let _ = self
-            .sojuctl(&["user", "delete", "-username", username])
+            .sojuctl(&["user", "delete", username])
             .await;
 
         let user_dir = self.sessions_dir.join(username);
