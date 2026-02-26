@@ -75,11 +75,11 @@ impl Manager {
         let result = self
             .sojuctl(&[
                 "user", "run",
-                "-name", username,
-                "network", "create",
-                "-name", &network_name,
-                "-addr", &irc_addr,
-                "-nick", username,
+        username,
+        "network", "create",
+        "-name", &network_name,
+        "-addr", &irc_addr,
+        "-nick", username,
             ])
             .await;
 
