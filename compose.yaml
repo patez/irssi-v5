@@ -30,6 +30,7 @@ services:
       - .env
     environment:
       PORT:           "3001"
+      DOCKER_HOST:    "unix:///var/run/docker.sock"
       BASE_URL:       "${BASE_URL}"
       CF_AUD:         "${CF_AUD}"
       CF_TEAM_DOMAIN: "${CF_TEAM_DOMAIN}"
@@ -37,7 +38,7 @@ services:
       DEV_MODE:       "${DEV_MODE:-false}"
       DEV_USER:       "${DEV_USER:-devuser}"
       SOJU_ADDR:      "soju:6667"
-      SOJU_SOCKET:    "/soju/soju.sock"
+      SOJU_CONFIG:    "/etc/soju/config"
       IRC_SERVER:     "${IRC_SERVER:-irc.libera.chat}"
       IRC_PORT:       "${IRC_PORT:-6697}"
       PUBLIC_DIR:     "./public"
@@ -47,6 +48,7 @@ services:
     volumes:
       - irssi-v5-data:/data
       - soju-socket:/soju
+      - /run/user/1001/podman/podman.sock:/var/run/docker.sock:ro
     depends_on:
       - soju
     networks:

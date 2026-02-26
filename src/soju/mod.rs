@@ -145,20 +145,19 @@ settings = {{
     }
 
     async fn sojuctl(&self, args: &[&str]) -> Result<()> {
-        let output = Command::new("sojuctl")
-            .arg("-config")
-            .arg(&self.soju_config)
-            .args(args)
-            .output()
-            .await
-            .context("failed to run sojuctl")?;
+    let output = Command::new("podman")
+        .args(["exec", "soju", "sojuctl", "-config", &self.soju_config])
+        .args(args)
+        .output()
+        .await
+        .context("failed to run sojuctl")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("sojuctl error: {}", stderr.trim()));
-        }
-        Ok(())
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("sojuctl error: {}", stderr.trim()));
     }
+    Ok(())
+}
 }
 
 fn random_password() -> String {
