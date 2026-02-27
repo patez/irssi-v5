@@ -18,6 +18,7 @@ FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     irssi \
+    dtach \
     sqlite3 \
     wget \
     cmake \

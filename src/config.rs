@@ -39,6 +39,10 @@ pub struct Config {
     // ttyd port range
     pub ttyd_base_port: u16,
 
+    // When true, ttyd runs irssi inside dtach so the irssi process survives
+    // browser disconnects. Set DTACH_SESSION=true in .env to enable.
+    pub dtach_session: bool,
+
     // Filesystem
     pub data_dir: PathBuf,
     pub sessions_dir: PathBuf,
@@ -85,6 +89,7 @@ impl Config {
             irc_addr: env_var("IRC_ADDR", "irc+insecure://irc.libera.chat"),
             irc_network_name: env_var("IRC_NETWORK_NAME", "libera"),
             ttyd_base_port: env_var("TTYD_BASE_PORT", "7100").parse().context("invalid TTYD_BASE_PORT")?,
+            dtach_session: env_var("DTACH_SESSION", "false") == "true",
             sessions_dir: data_dir.join("sessions"),
             public_dir: PathBuf::from(env_var("PUBLIC_DIR", "./public")),
             data_dir,

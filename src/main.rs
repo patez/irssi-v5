@@ -515,8 +515,7 @@ async fn main() -> Result<()> {
     let db_path = cfg.data_dir.join("app.db");
     let store = Store::new(db_path.to_str().unwrap()).await?;
 
-    let sessions = SessionManager::new(cfg.ttyd_base_port);
-
+    let sessions = SessionManager::new(cfg.ttyd_base_port, cfg.dtach_session);
     let soju = SojuManager::new(
         cfg.soju_socket.clone(),
         cfg.sessions_dir.clone(),

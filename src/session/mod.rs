@@ -13,13 +13,16 @@ use tracing::{info, warn};
 
 pub struct Session {
     pub port: u16,
-    // Keep child alive — dropping it would kill the process
+    // Keep child alive — dropping it would kill the ttyd process.
+    // When dtach_session is true the irssi process lives on inside a dtach
+    // socket even after ttyd (and this child) exits.
     _child: Child,
 }
 
 pub struct Manager {
     sessions: Arc<DashMap<String, Arc<Mutex<Session>>>>,
     port_pool: Arc<Mutex<PortPool>>,
+    dtach_session: bool,
 }
 
 struct PortPool {
@@ -48,10 +51,11 @@ impl PortPool {
 }
 
 impl Manager {
-    pub fn new(base_port: u16) -> Arc<Self> {
+    pub fn new(base_port: u16, dtach_session: bool) -> Arc<Self> {
         Arc::new(Self {
             sessions: Arc::new(DashMap::new()),
             port_pool: Arc::new(Mutex::new(PortPool::new(base_port))),
+            dtach_session,
         })
     }
 
@@ -69,24 +73,46 @@ impl Manager {
 
         let port = self.port_pool.lock().await.alloc()?;
 
-        // Canonicalize to absolute path — relative paths break when the working
-        // directory doesn't match the project root
         let abs_user_dir = std::fs::canonicalize(user_dir)
             .unwrap_or_else(|_| user_dir.to_path_buf());
         let home_str = abs_user_dir.to_str().unwrap_or("/tmp").to_owned();
+        let config_path = format!("{}/config", home_str);
 
-        info!("spawning ttyd for {} on port {} --home {}", username, port, home_str);
+        let child = if self.dtach_session {
+            // dtach socket path is per-user so multiple users don't collide.
+            // /tmp/irc-<username>.sock is fine — it lives inside the container.
+            let sock = format!("/tmp/irc-{}.sock", username);
+            info!("spawning ttyd+dtach for {} on port {} sock {}", username, port, sock);
 
-        let child = Command::new("ttyd")
-            .args([
-                "--port", &port.to_string(),
-                "--interface", "127.0.0.1",
-                "--writable",
-                "irssi", "--config", &format!("{}/config", home_str),
-            ])
-            .kill_on_drop(true)
-            .spawn()
-            .with_context(|| format!("failed to spawn ttyd for {}", username))?;
+            // dtach -A <socket> <cmd>
+            //   -A  attach to existing socket if it exists,
+            //       create and run cmd if not — so reconnecting the browser
+            //       reattaches to the running irssi rather than starting fresh.
+            Command::new("ttyd")
+                .args([
+                    "--port", &port.to_string(),
+                    "--interface", "127.0.0.1",
+                    "--writable",
+                    "dtach", "-A", &sock,
+                    "irssi", "--config", &config_path,
+                ])
+                .kill_on_drop(true)
+                .spawn()
+                .with_context(|| format!("failed to spawn ttyd+dtach for {}", username))?
+        } else {
+            info!("spawning ttyd for {} on port {} --home {}", username, port, home_str);
+
+            Command::new("ttyd")
+                .args([
+                    "--port", &port.to_string(),
+                    "--interface", "127.0.0.1",
+                    "--writable",
+                    "irssi", "--config", &config_path,
+                ])
+                .kill_on_drop(true)
+                .spawn()
+                .with_context(|| format!("failed to spawn ttyd for {}", username))?
+        };
 
         // Wait for ttyd to start accepting connections
         wait_for_port(port, Duration::from_secs(5))
@@ -104,14 +130,12 @@ impl Manager {
         let username_owned = username.to_string();
 
         tokio::spawn(async move {
-            // Poll until session is gone from the map or child exits
             loop {
                 sleep(Duration::from_secs(5)).await;
                 let entry = sessions.get(&username_owned);
                 match entry {
                     None => break,
                     Some(e) => {
-                        // try_lock: if locked, session is actively in use
                         if let Ok(mut sess) = e.try_lock() {
                             if let Ok(Some(_)) = sess._child.try_wait() {
                                 drop(sess);
@@ -129,11 +153,22 @@ impl Manager {
         Ok(port)
     }
 
+    /// Kill the ttyd process and, if dtach mode is on, also remove the dtach
+    /// socket so the next get_or_create starts a fresh irssi.
     pub fn kill(&self, username: &str) {
-        // Removing from the map drops the Arc<Mutex<Session>>,
-        // and since _child has kill_on_drop(true), the process is killed.
         if self.sessions.remove(username).is_some() {
-            info!("killed session for {}", username);
+            info!("killed ttyd session for {}", username);
+        }
+
+        if self.dtach_session {
+            // Removing the socket file causes dtach to exit, which kills irssi.
+            // Best-effort — if the file doesn't exist that's fine.
+            let sock = format!("/tmp/irc-{}.sock", username);
+            match std::fs::remove_file(&sock) {
+                Ok(_) => info!("removed dtach socket {} for {}", sock, username),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => warn!("failed to remove dtach socket {} for {}: {}", sock, username, e),
+            }
         }
     }
 
