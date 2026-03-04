@@ -11,14 +11,7 @@ pub struct Manager {
     socket_path: PathBuf,
     sessions_dir: PathBuf,
     soju_addr: String,
-    // Full soju IRC address, e.g:
-    //   irc+insecure://irc.swepipe.net        plain text, default port
-    //   irc+insecure://irc.swepipe.net:6667   plain text, explicit port
-    //   ircs://irc.libera.chat                TLS, default port
-    //   ircs://irc.libera.chat:6697           TLS, explicit port
     irc_addr: String,
-    // Short name for the network, used in soju and irssi
-    // e.g. "swepipe", "libera", "ircnet"
     irc_network_name: String,
     /// Tracks users provisioned in this process run (avoids redundant sojuctl calls)
     provisioned: Arc<DashMap<String, ()>>,
@@ -44,6 +37,12 @@ impl Manager {
 
     /// Ensure a soju account and irssi config exist for this user.
     /// Idempotent — safe to call on every login.
+    ///
+    /// The password is stored in <user_dir>/soju_password so that if soju's
+    /// database is wiped (e.g. the soju stack is redeployed) but the app
+    /// volume is intact, we can re-create the soju user with the same password
+    /// the irssi config already has. Without this the passwords diverge and
+    /// SASL auth breaks.
     pub async fn ensure_user(&self, username: &str) -> Result<()> {
         if self.provisioned.contains_key(username) {
             return Ok(());
@@ -51,16 +50,29 @@ impl Manager {
 
         let user_dir = self.sessions_dir.join(username);
         let config_path = user_dir.join("config");
+        let password_path = user_dir.join("soju_password");
 
-        // Already provisioned from a previous run
-        if config_path.exists() {
-            self.provisioned.insert(username.to_string(), ());
-            return Ok(());
-        }
+        let password = if password_path.exists() {
+            // Password file exists — read it and (re-)provision soju in case
+            // its DB was wiped. Sojuctl calls are idempotent so this is safe.
+            tokio::fs::read_to_string(&password_path)
+                .await
+                .context("failed to read soju_password")?
+                .trim()
+                .to_string()
+        } else {
+            // First time — generate a fresh password and write it out.
+            tokio::fs::create_dir_all(&user_dir)
+                .await
+                .context("failed to create user dir")?;
+            let pw = random_password();
+            tokio::fs::write(&password_path, &pw)
+                .await
+                .context("failed to write soju_password")?;
+            pw
+        };
 
-        let password = random_password();
-
-        // Create soju user
+        // (Re-)create soju user with the stored password
         let result = self
             .sojuctl(&[
                 "user", "create",
@@ -70,12 +82,23 @@ impl Manager {
             .await;
 
         if let Err(e) = result {
-            if !e.to_string().contains("already exists") {
+            let msg = e.to_string();
+            if msg.contains("already exists") {
+                // User exists in soju DB — update the password to match our file
+                // in case it drifted (e.g. manual sojuctl intervention).
+                let _ = self
+                    .sojuctl(&[
+                        "user", "update",
+                        "-username", username,
+                        "-password", &password,
+                    ])
+                    .await;
+            } else {
                 return Err(e).context("soju user create failed");
             }
         }
 
-        // Add upstream IRC network
+        // Add upstream IRC network — idempotent, ignore "already exists"
         let result = self
             .sojuctl(&[
                 "user", "run",
@@ -93,13 +116,10 @@ impl Manager {
             }
         }
 
-        // Write irssi config
-        tokio::fs::create_dir_all(&user_dir)
-            .await
-            .context("failed to create user dir")?;
-
-        let (soju_host, soju_port) = split_addr(&self.soju_addr);
-        let irssi_conf = format!(
+        // Write irssi config only if it doesn't already exist
+        if !config_path.exists() {
+            let (soju_host, soju_port) = split_addr(&self.soju_addr);
+            let irssi_conf = format!(
 r#"chatnets = {{
   {network_name} = {{
     type = "IRC";
@@ -127,12 +147,13 @@ settings = {{
   "fe-common/core" = {{ term_charset = "UTF-8"; }};
 }};
 "#,
-            network_name = self.irc_network_name,
-        );
+                network_name = self.irc_network_name,
+            );
 
-        tokio::fs::write(&config_path, irssi_conf)
-            .await
-            .context("failed to write irssi config")?;
+            tokio::fs::write(&config_path, irssi_conf)
+                .await
+                .context("failed to write irssi config")?;
+        }
 
         info!("Provisioned soju user: {}", username);
         self.provisioned.insert(username.to_string(), ());
