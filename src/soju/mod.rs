@@ -86,13 +86,13 @@ impl Manager {
             if msg.contains("already exists") {
                 // User exists in soju DB — update the password to match our file
                 // in case it drifted (e.g. manual sojuctl intervention).
-                let _ = self
-                    .sojuctl(&[
-                        "user", "update",
-                        "-username", username,
-                        "-password", &password,
-                    ])
-                    .await;
+                self.sojuctl(&[
+                    "user", "update",
+                    "-username", username,
+                    "-password", &password,
+                ])
+                .await
+                .context("soju user update failed")?;
             } else {
                 return Err(e).context("soju user create failed");
             }
