@@ -62,6 +62,7 @@ WORKDIR /app
 COPY --from=builder --chown=irssiuser:irssiuser \
     /build/target/release/irssi-v5 ./irssi-v5
 COPY --chown=irssiuser:irssiuser public/ ./public/
+COPY --chown=irssiuser:irssiuser sojuctl.config /etc/soju/config
 
 RUN mkdir -p /data/sessions /soju \
     && chown -R irssiuser:irssiuser /app /data /soju
