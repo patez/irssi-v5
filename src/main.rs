@@ -289,6 +289,8 @@ async fn handle_terminal_http(
 
     let mut builder = axum::response::Response::builder().status(status);
     for (k, v) in resp.headers() {
+        if k.as_str().eq_ignore_ascii_case("content-security-policy") { continue; }
+        if k.as_str().eq_ignore_ascii_case("content-security-policy-report-only") { continue; }
         builder = builder.header(k, v);
     }
 
