@@ -24,20 +24,12 @@ pub struct Config {
     pub soju_addr: String,
     pub soju_socket: PathBuf,
 
-    // IRC upstream — full soju address format
-    // Examples:
-    //   irc+insecure://irc.swepipe.net        plain text, default port
-    //   irc+insecure://irc.swepipe.net:6667   plain text, explicit port
-    //   ircs://irc.libera.chat                TLS, default port
-    //   ircs://irc.libera.chat:6697           TLS, explicit port
     pub irc_addr: String,
-
-    // Human-readable network name shown in soju and irssi password
-    // e.g. "swepipe", "libera", "ircnet"
     pub irc_network_name: String,
 
-    // ttyd port range
+    // ttyd
     pub ttyd_base_port: u16,
+    pub ttyd_index: PathBuf,
 
     // When true, ttyd runs irssi inside dtach so the irssi process survives
     // browser disconnects. Set DTACH_SESSION=true in .env to enable.
@@ -51,7 +43,6 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        // Load .env if present (dev convenience)
         let _ = dotenvy::dotenv();
 
         let data_dir = if PathBuf::from("/data").exists() {
@@ -89,6 +80,7 @@ impl Config {
             irc_addr: env_var("IRC_ADDR", "irc+insecure://irc.libera.chat"),
             irc_network_name: env_var("IRC_NETWORK_NAME", "libera"),
             ttyd_base_port: env_var("TTYD_BASE_PORT", "7100").parse().context("invalid TTYD_BASE_PORT")?,
+            ttyd_index: PathBuf::from(env_var("TTYD_INDEX", "./public/ttyd.html")),
             dtach_session: env_var("DTACH_SESSION", "false") == "true",
             sessions_dir: data_dir.join("sessions"),
             public_dir: PathBuf::from(env_var("PUBLIC_DIR", "./public")),

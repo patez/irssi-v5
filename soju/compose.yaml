@@ -1,0 +1,41 @@
+name: soju
+
+# Managed independently from the app stack.
+# cd soju && podman-compose up -d   ← start once, rarely touched
+# cd soju && podman-compose down    ← only when soju itself needs updating
+
+services:
+  soju:
+    build:
+      context: .
+      dockerfile: Dockerfile.soju
+    image: soju:latest
+    container_name: soju
+    restart: always
+    stop_signal: SIGKILL
+    stop_grace_period: 5s
+    volumes:
+      - ./soju.config:/etc/soju/config:ro
+      - soju-data:/var/lib/soju
+      - soju-socket:/soju
+    networks:
+      - soju-internal
+    expose:
+      - "6667"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /soju/soju.sock"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  soju-data:
+    name: soju-data
+  soju-socket:
+    name: soju-socket
+
+networks:
+  soju-internal:
+    name: soju-internal
+    driver: bridge
