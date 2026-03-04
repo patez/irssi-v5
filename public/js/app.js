@@ -1,52 +1,14 @@
+const DEBUG = location.hostname === 'localhost' || location.hostname.endsWith('.ts.net');
+const log = (...args) => DEBUG && console.log(...args);
+
 const app = {
     user: null,
-
-    _patchTtyd(frame) {
-        const doc = frame.contentDocument;
-        if (!doc) return;
-
-        let vp = doc.querySelector('meta[name=viewport]');
-        if (!vp) {
-            vp = doc.createElement('meta');
-            vp.name = 'viewport';
-            doc.head.appendChild(vp);
-        }
-        vp.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
-
-        const link = doc.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = '/css/ttyd-overrides.css';
-        doc.head.appendChild(link);
-
-        // Give xterm a moment to pick up the new dimensions
-        setTimeout(() => {
-            frame.contentWindow?.dispatchEvent(new Event('resize'));
-        }, 100);
-    },
-
-    async _reconnect() {
-        if (this._reconnecting) return;
-        this._reconnecting = true;
-        this.updateStatus('connecting', 'Reconnecting...');
-        try {
-            const res = await fetch('/api/terminal');
-            if (!res.ok) throw new Error(`${res.status}`);
-        } catch {
-            this.updateStatus('disconnected', 'Reconnect failed');
-            this._reconnecting = false;
-            return;
-        }
-        const frame = document.getElementById('terminal-frame');
-        frame.src = '';
-        await new Promise(r => setTimeout(r, 100));
-        frame.onload = () => {
-            this._connected = true;
-            this.updateStatus('connected', 'Connected');
-            this._patchTtyd(frame);
-            this._reconnecting = false;
-        };
-        frame.src = '/terminal/';
-    },
+    _term: null,
+    _fitAddon: null,
+    _ws: null,
+    _reconnecting: false,
+    _reconnectTimer: null,
+    _lastHidden: 0,
 
     async init() {
         try {
@@ -74,27 +36,192 @@ const app = {
 
         document.getElementById('btn-reset').addEventListener('click', () => this.resetSession());
 
+        this._initTerm();
+        this._setupReconnect();
         await this.loadTerminal();
+    },
+
+    _initTerm() {
+        this._term = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            theme: {
+                background: '#000000',
+                foreground: '#ffffff',
+            },
+            scrollback: 5000,
+            allowTransparency: false,
+            scrollOnUserInput: true,
+            smoothScrollDuration: 0,
+        });
+
+        this._fitAddon = new FitAddon.FitAddon();
+        this._term.loadAddon(this._fitAddon);
+        this._term.open(document.getElementById('terminal'));
+        setTimeout(() => this._fitAddon.fit(), 100);
+
+        // Send input to ttyd — protocol: '0' + data
+        this._term.onData(data => {
+            if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+            this._ws.send('0' + data);
+        });
+
+        // iOS touch scroll — sends PgUp/PgDn to irssi
+        const termEl = document.getElementById('terminal');
+        let touchStartY = 0;
+        let touchAccum = 0;
+
+        termEl.addEventListener('touchstart', (e) => {
+            touchStartY = e.touches[0].clientY;
+            touchAccum = 0;
+            log('touchstart on terminal', e.touches[0].clientY);
+        }, { passive: true });
+
+        termEl.addEventListener('touchmove', (e) => {
+            const dy = touchStartY - e.touches[0].clientY;
+            touchAccum += dy;
+            touchStartY = e.touches[0].clientY;
+
+            const lines = Math.trunc(touchAccum / 60);
+            if (lines !== 0) {
+                touchAccum -= lines * 60;
+                const key = lines > 0 ? '\x1b[6~' : '\x1b[5~'; // PgDn / PgUp
+                for (let i = 0; i < Math.abs(lines); i++) {
+                    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                        this._ws.send('0' + key);
+                    }
+                }
+            }
+            e.preventDefault();
+        }, { passive: false });
+
+        // Resize on container size change
+        const ro = new ResizeObserver(() => this._onResize());
+        ro.observe(document.getElementById('terminal-container'));
+        window.addEventListener('resize', () => this._onResize());
+
+        // iOS keyboard resize
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', () => {
+                setTimeout(() => this._onResize(), 50);
+            });
+            window.visualViewport.addEventListener('scroll', () => {
+                setTimeout(() => this._onResize(), 50);
+            });
+        }
+    },
+
+    _onResize() {
+        if (!this._fitAddon) return;
+
+        const container = document.getElementById('terminal-container');
+        const statusBar = document.getElementById('status-bar');
+
+        if (window.visualViewport) {
+            const vv = window.visualViewport;
+            const keyboardOpen = vv.height < window.innerHeight * 0.75;
+
+            container.style.position = 'fixed';
+            container.style.top = vv.offsetTop + 'px';
+            container.style.left = vv.offsetLeft + 'px';
+            container.style.width = vv.width + 'px';
+            container.style.height = keyboardOpen ? vv.height + 'px' : (vv.height - 50) + 'px';
+
+            statusBar.style.display = keyboardOpen ? 'none' : 'flex';
+            if (!keyboardOpen) {
+                statusBar.style.position = 'fixed';
+                statusBar.style.top = (vv.offsetTop + vv.height - 50) + 'px';
+                statusBar.style.left = vv.offsetLeft + 'px';
+                statusBar.style.width = vv.width + 'px';
+            }
+        }
+
+        this._fitAddon.fit();
+        if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+        this._ws.send('1' + JSON.stringify({ columns: this._term.cols, rows: this._term.rows }));
+    },
+
+    _setupReconnect() {
+        const STALE_MS = 20_000;
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                this._lastHidden = Date.now();
+            } else if (this._lastHidden > 0 && Date.now() - this._lastHidden > STALE_MS) {
+                this._scheduleReconnect(300);
+            }
+        });
+        window.addEventListener('pageshow', (e) => {
+            if (e.persisted) this._scheduleReconnect(0);
+        });
+        window.addEventListener('focus', () => {
+            if (this._lastHidden > 0 && Date.now() - this._lastHidden > STALE_MS)
+                this._scheduleReconnect(300);
+        });
+    },
+
+    _scheduleReconnect(ms) {
+        clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = setTimeout(() => this._connect(), ms);
     },
 
     async loadTerminal() {
         this.updateStatus('connecting', 'Starting terminal...');
-        this._connected = false;
         try {
             const res = await fetch('/api/terminal');
             if (!res.ok) throw new Error(`${res.status}`);
-        } catch (e) {
+        } catch {
             this.updateStatus('disconnected', 'Failed to start terminal');
             return;
         }
+        this._connect();
+    },
 
-        const frame = document.getElementById('terminal-frame');
-        frame.onload = () => {
-            this._connected = true;
+    _connect() {
+        if (this._ws) {
+            this._ws.onclose = null;
+            this._ws.onerror = null;
+            this._ws.close();
+            this._ws = null;
+        }
+
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        const ws = new WebSocket(`${proto}://${location.host}/terminal/ws`, ['tty']);
+        ws.binaryType = 'arraybuffer';
+        this._ws = ws;
+        this._reconnecting = false;
+
+        ws.onopen = () => {
+            log('ws open, sending auth');
+            ws.send(JSON.stringify({ AuthToken: '' }));
             this.updateStatus('connected', 'Connected');
-            this._patchTtyd(frame);
+            this._onResize();
         };
-        frame.src = '/terminal/';
+
+        ws.onmessage = (e) => {
+            if (!(e.data instanceof ArrayBuffer)) return;
+            const buf = new Uint8Array(e.data);
+            if (buf.length === 0) return;
+            const type = buf[0];
+            const payload = buf.slice(1);
+
+            log('type:', type, 'payload preview:', new TextDecoder().decode(payload.slice(0, 80)));
+
+            if (type === 48) {
+                this._term.write(payload);
+            }
+            // 49 = title, 50 = prefs — ignore
+        };
+
+        ws.onclose = () => {
+            if (!this._reconnecting) {
+                this.updateStatus('disconnected', 'Disconnected');
+            }
+        };
+
+        ws.onerror = () => {
+            this.updateStatus('disconnected', 'Connection error');
+        };
     },
 
     async resetSession() {
@@ -102,8 +229,8 @@ const app = {
         try {
             await fetch('/api/session/clear', { method: 'POST' });
             this.updateStatus('connecting', 'Restarting...');
-            const frame = document.getElementById('terminal-frame');
-            frame.src = '';
+            if (this._ws) { this._ws.onclose = null; this._ws.close(); this._ws = null; }
+            this._term.clear();
             setTimeout(() => this.loadTerminal(), 1500);
         } catch {
             this.updateStatus('disconnected', 'Reset failed');
@@ -117,7 +244,5 @@ const app = {
         if (span) span.textContent = text;
     }
 };
-
-
 
 window.addEventListener('DOMContentLoaded', () => app.init());

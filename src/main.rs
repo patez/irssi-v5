@@ -168,22 +168,6 @@ async fn handle_provision(
     Ok(Json(json!({"ok": true})))
 }
 
-// ── Router changes ────────────────────────────────────────────────────────────
-// Replace the three /terminal routes with explicit WS + HTTP routes:
-//
-//   .route("/terminal/ws",    get(handle_terminal_ws))
-//   .route("/terminal/",      get(handle_terminal_http))
-//   .route("/terminal/*path", get(handle_terminal_http))
-//
-// ttyd's JS client connects to /terminal/ws — so the iframe src stays /terminal/
-// but the WS endpoint is explicit and axum can negotiate the upgrade cleanly.
-
-// ── WebSocket handler ─────────────────────────────────────────────────────────
-
-/// Dedicated WS upgrade handler — axum extracts `WebSocketUpgrade` before
-/// your code runs, so the HTTP→WS handshake is already done when we call
-/// connect_async to ttyd. No more race between upgrade negotiation and the
-/// upstream connect.
 async fn handle_terminal_ws(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -238,92 +222,7 @@ async fn handle_terminal_ws(
 
 // ── HTTP proxy handler ────────────────────────────────────────────────────────
 
-/// Proxies ttyd's static assets (HTML, JS, CSS) — no WS logic here at all.
-async fn handle_terminal_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    req: axum::extract::Request,
-) -> Result<Response, AppError> {
-    let user = state.authenticate(&headers).await?;
 
-    let port = state
-        .sessions
-        .get_or_create(
-            &user.username,
-            &state.cfg.sessions_dir.join(&user.username),
-        )
-        .await
-        .map_err(|e| {
-            error!("session.get_or_create({}): {:#}", user.username, e);
-            AppError::Internal(e)
-        })?;
-
-    let path = req.uri().path();
-    let stripped = path.strip_prefix("/terminal").unwrap_or(path);
-    let stripped = if stripped.is_empty() { "/" } else { stripped };
-    // At the top of handle_terminal_http, before the proxy logic:
-    if stripped == "/token" {
-    return Ok(axum::response::Response::builder()
-        .status(200)
-        .body(axum::body::Body::empty())
-        .unwrap());
-    }
-    let query = req
-        .uri()
-        .query()
-        .map(|q| format!("?{}", q))
-        .unwrap_or_default();
-
-    let uri_str = format!("http://127.0.0.1:{}{}{}", port, stripped, query);
-    info!("HTTP proxy for {}: {} → {}", user.username, path, uri_str);
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(&uri_str)
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("http proxy error: {}", e)))?;
-
-    let status = axum::http::StatusCode::from_u16(resp.status().as_u16())
-        .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-
-    let mut builder = axum::response::Response::builder().status(status);
-    for (k, v) in resp.headers() {
-        if k.as_str().eq_ignore_ascii_case("content-security-policy") { continue; }
-        if k.as_str().eq_ignore_ascii_case("content-security-policy-report-only") { continue; }
-        builder = builder.header(k, v);
-    }
-
-    let body = resp
-        .bytes()
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("proxy body error: {}", e)))?;
-
-    builder
-        .body(axum::body::Body::from(body))
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("response build error: {}", e)))
-}
-
-// ── Router snippet ────────────────────────────────────────────────────────────
-//
-// let app = Router::new()
-//     .route("/api/me",              get(handle_me))
-//     .route("/api/terminal",        get(handle_provision))
-//     .route("/terminal/ws",         get(handle_terminal_ws))   // ← explicit WS
-//     .route("/terminal/",           get(handle_terminal_http))
-//     .route("/terminal/*path",      get(handle_terminal_http))
-//     .route("/api/session/clear",   post(handle_clear_session))
-//     // ... admin routes ...
-//     .fallback_service(ServeDir::new(&cfg.public_dir))
-//     .layer(TraceLayer::new_for_http())
-//     .with_state(state);
-//
-// Also remove the old `handle_terminal` and `proxy_ttyd` functions entirely.
-// The `splice_ws` function stays unchanged.
-//
-// NOTE: you also need to add this import at the top:
-//   use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-/// Bidirectional WebSocket splice: browser ↔ ttyd
 async fn splice_ws(
     client: axum::extract::ws::WebSocket,
     upstream: tokio_tungstenite::WebSocketStream<
@@ -536,13 +435,9 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         // User API
-        .route("/terminal/ws",    get(handle_terminal_ws))
-        .route("/terminal/token", get(handle_terminal_ws))
+        .route("/terminal/ws", get(handle_terminal_ws))
         .route("/api/me", get(handle_me))
         .route("/api/terminal", get(handle_provision))
-        //.route("/token", get(handle_token))
-        .route("/terminal/", get(handle_terminal_http))
-        .route("/terminal/*path", get(handle_terminal_http))
         .route("/api/session/clear", post(handle_clear_session))
         // Admin API
         .route("/api/admin/users", get(handle_admin_users))

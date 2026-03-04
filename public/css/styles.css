@@ -26,27 +26,32 @@ body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    position: fixed;
-    touch-action: none;
     background: var(--bg-primary);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     color: var(--text-primary);
 }
 
 #terminal-container {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 50px;
-    background: #000;
-}
+     position: absolute;
+     top: 0; left: 0; right: 0;
+     height: calc(100dvh - 50px);
+     background: #000;
+     overflow: hidden;
+ }
 
-#terminal-frame {
+#terminal {
     width: 100%;
     height: 100%;
-    border: none;
-    display: block;
+}
+
+/* xterm overrides */
+.xterm {
+    height: 100%;
+    padding: 4px;
+}
+
+.xterm-viewport {
+    overflow-y: hidden !important;
 }
 
 #status-bar {
