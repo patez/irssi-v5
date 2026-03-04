@@ -1,6 +1,53 @@
 const app = {
     user: null,
 
+    _patchTtyd(frame) {
+        const doc = frame.contentDocument;
+        if (!doc) return;
+
+        let vp = doc.querySelector('meta[name=viewport]');
+        if (!vp) {
+            vp = doc.createElement('meta');
+            vp.name = 'viewport';
+            doc.head.appendChild(vp);
+        }
+        vp.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+
+        const link = doc.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = '/css/ttyd-overrides.css';
+        doc.head.appendChild(link);
+
+        // Give xterm a moment to pick up the new dimensions
+        setTimeout(() => {
+            frame.contentWindow?.dispatchEvent(new Event('resize'));
+        }, 100);
+    },
+
+    async _reconnect() {
+        if (this._reconnecting) return;
+        this._reconnecting = true;
+        this.updateStatus('connecting', 'Reconnecting...');
+        try {
+            const res = await fetch('/api/terminal');
+            if (!res.ok) throw new Error(`${res.status}`);
+        } catch {
+            this.updateStatus('disconnected', 'Reconnect failed');
+            this._reconnecting = false;
+            return;
+        }
+        const frame = document.getElementById('terminal-frame');
+        frame.src = '';
+        await new Promise(r => setTimeout(r, 100));
+        frame.onload = () => {
+            this._connected = true;
+            this.updateStatus('connected', 'Connected');
+            this._patchTtyd(frame);
+            this._reconnecting = false;
+        };
+        frame.src = '/terminal/';
+    },
+
     async init() {
         try {
             const res = await fetch('/api/me');
@@ -32,21 +79,22 @@ const app = {
 
     async loadTerminal() {
         this.updateStatus('connecting', 'Starting terminal...');
-
-        // Hit /api/terminal first — this provisions the soju account and
-        // starts ttyd. Only then point the iframe at /terminal/ to proxy it.
+        this._connected = false;
         try {
             const res = await fetch('/api/terminal');
             if (!res.ok) throw new Error(`${res.status}`);
         } catch (e) {
             this.updateStatus('disconnected', 'Failed to start terminal');
-            console.error(e);
             return;
         }
 
         const frame = document.getElementById('terminal-frame');
+        frame.onload = () => {
+            this._connected = true;
+            this.updateStatus('connected', 'Connected');
+            this._patchTtyd(frame);
+        };
         frame.src = '/terminal/';
-        frame.onload = () => this.updateStatus('connected', 'Connected');
     },
 
     async resetSession() {
@@ -69,5 +117,7 @@ const app = {
         if (span) span.textContent = text;
     }
 };
+
+
 
 window.addEventListener('DOMContentLoaded', () => app.init());

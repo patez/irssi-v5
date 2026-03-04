@@ -25,7 +25,6 @@ services:
       IRC_ADDR:         "${IRC_ADDR}"
       IRC_NETWORK_NAME: "${IRC_NETWORK_NAME}"
       PUBLIC_DIR:       "./public"
-      TTYD_INDEX:       "/app/public/ttyd.html"
       RUST_LOG:         "irssi_v5=info,warn"
       LANG:             en_US.UTF-8
       LC_ALL:           en_US.UTF-8

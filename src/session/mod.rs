@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +21,6 @@ pub struct Session {
 pub struct Manager {
     sessions: Arc<DashMap<String, Arc<Mutex<Session>>>>,
     port_pool: Arc<Mutex<PortPool>>,
-    ttyd_index: String,
     dtach_session: bool,
 }
 
@@ -51,11 +50,10 @@ impl PortPool {
 }
 
 impl Manager {
-    pub fn new(base_port: u16, dtach_session: bool, ttyd_index: PathBuf) -> Arc<Self> {
+    pub fn new(base_port: u16, dtach_session: bool) -> Arc<Self> {
         Arc::new(Self {
             sessions: Arc::new(DashMap::new()),
             port_pool: Arc::new(Mutex::new(PortPool::new(base_port))),
-            ttyd_index: ttyd_index.to_str().unwrap_or("./public/ttyd.html").to_owned(),
             dtach_session,
         })
     }
@@ -85,11 +83,12 @@ impl Manager {
                 .args([
                     "--port", &port.to_string(),
                     "--interface", "127.0.0.1",
-                    "--index", &self.ttyd_index,
                     "--writable",
                     "dtach", "-A", &sock,
                     "irssi", "--config", &config_path,
                 ])
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit())
                 .kill_on_drop(true)
                 .spawn()
                 .with_context(|| format!("failed to spawn ttyd+dtach for {}", username))?
@@ -100,10 +99,11 @@ impl Manager {
                 .args([
                     "--port", &port.to_string(),
                     "--interface", "127.0.0.1",
-                    "--index", &self.ttyd_index,
                     "--writable",
                     "irssi", "--config", &config_path,
                 ])
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit())
                 .kill_on_drop(true)
                 .spawn()
                 .with_context(|| format!("failed to spawn ttyd for {}", username))?
