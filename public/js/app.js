@@ -143,20 +143,30 @@ const app = {
     },
 
     _setupReconnect() {
-        const STALE_MS = 20_000;
+        // iOS Safari kills the WebSocket immediately when the tab goes to
+        // background, regardless of how long it was hidden. So on becoming
+        // visible we always reconnect if the WebSocket is not open — no
+        // time threshold needed.
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
                 this._lastHidden = Date.now();
-            } else if (this._lastHidden > 0 && Date.now() - this._lastHidden > STALE_MS) {
-                this._scheduleReconnect(300);
+            } else {
+                if (!this._ws || this._ws.readyState !== WebSocket.OPEN) {
+                    this._scheduleReconnect(300);
+                }
             }
         });
+
+        // pageshow fires when returning from bfcache (back/forward navigation)
         window.addEventListener('pageshow', (e) => {
             if (e.persisted) this._scheduleReconnect(0);
         });
+
+        // focus fallback for cases visibilitychange doesn't fire
         window.addEventListener('focus', () => {
-            if (this._lastHidden > 0 && Date.now() - this._lastHidden > STALE_MS)
+            if (!this._ws || this._ws.readyState !== WebSocket.OPEN) {
                 this._scheduleReconnect(300);
+            }
         });
     },
 

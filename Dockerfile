@@ -42,7 +42,7 @@ RUN git clone --depth 1 https://github.com/tsl0922/ttyd.git /tmp/ttyd \
     && rm -rf /tmp/ttyd
 
 # Build sojuctl from source
-RUN git clone --depth 1 --branch v0.9.0 https://codeberg.org/emersion/soju.git /tmp/soju \
+RUN git clone --depth 1 --branch v0.10.0 https://github.com/emersion/soju.git /tmp/soju \
     && cd /tmp/soju \
     && GOFLAGS="-tags=libsqlite3" go build ./cmd/sojuctl \
     && cp sojuctl /usr/local/bin/ \
