@@ -9,6 +9,7 @@ const app = {
     _reconnecting: false,
     _reconnectTimer: null,
     _lastHidden: 0,
+    _expectingReconnect: false,
 
     async init() {
         try {
@@ -58,6 +59,8 @@ const app = {
 
         this._fitAddon = new FitAddon.FitAddon();
         this._term.loadAddon(this._fitAddon);
+        const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+        this._term.loadAddon(webLinksAddon);
         this._term.open(document.getElementById('terminal'));
         setTimeout(() => this._fitAddon.fit(), 100);
 
@@ -144,12 +147,12 @@ const app = {
 
     _setupReconnect() {
         // iOS Safari kills the WebSocket immediately when the tab goes to
-        // background, regardless of how long it was hidden. So on becoming
-        // visible we always reconnect if the WebSocket is not open — no
-        // time threshold needed.
+        // background regardless of how long it was hidden. Mark that we
+        // expect a reconnect so onclose/onerror don't flash "Disconnected".
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
                 this._lastHidden = Date.now();
+                this._expectingReconnect = true;
             } else {
                 if (!this._ws || this._ws.readyState !== WebSocket.OPEN) {
                     this._scheduleReconnect(300);
@@ -168,6 +171,15 @@ const app = {
                 this._scheduleReconnect(300);
             }
         });
+
+        // Polling fallback — iOS Safari sometimes fires neither visibilitychange
+        // nor focus reliably after returning from background. Poll every 2s and
+        // reconnect if the tab is visible but the socket is dead.
+        setInterval(() => {
+            if (!document.hidden && (!this._ws || this._ws.readyState === WebSocket.CLOSED)) {
+                this._scheduleReconnect(0);
+            }
+        }, 2000);
     },
 
     _scheduleReconnect(ms) {
@@ -203,6 +215,7 @@ const app = {
 
         ws.onopen = () => {
             log('ws open, sending auth');
+            this._expectingReconnect = false;
             ws.send(JSON.stringify({ AuthToken: '' }));
             this.updateStatus('connected', 'Connected');
             this._onResize();
@@ -224,13 +237,17 @@ const app = {
         };
 
         ws.onclose = () => {
-            if (!this._reconnecting) {
+            if (!this._reconnecting && !this._expectingReconnect) {
                 this.updateStatus('disconnected', 'Disconnected');
             }
+            log('ws closed, expectingReconnect:', this._expectingReconnect);
         };
 
         ws.onerror = () => {
-            this.updateStatus('disconnected', 'Connection error');
+            if (!this._expectingReconnect) {
+                this.updateStatus('disconnected', 'Connection error');
+            }
+            log('ws error, expectingReconnect:', this._expectingReconnect);
         };
     },
 
