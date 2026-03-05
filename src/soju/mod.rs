@@ -76,7 +76,7 @@ impl Manager {
         let result = self
             .sojuctl(&[
                 "user", "create",
-                "-username", username,
+                username,
                 "-password", &password,
             ])
             .await;
