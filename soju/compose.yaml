@@ -22,16 +22,12 @@ services:
       - soju-internal
     expose:
       - "6667"
-    ports:
-      - "113:113"
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /soju/soju.sock"]
       interval: 5s
       timeout: 2s
       retries: 10
       start_period: 5s
-    cap_add:
-      - NET_BIND_SERVICE
 
 volumes:
   soju-data:
