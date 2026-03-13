@@ -64,9 +64,6 @@ const app = {
                 this._ws.send('0' + text);
             }
         } catch (e) {
-            // First call may fail with a permission error on iOS even after
-            // the user grants access — the permission dialog itself rejects
-            // the promise. Retry once after a short delay.
             log('paste attempt 1 failed:', e);
             setTimeout(async () => {
                 try {
@@ -116,8 +113,6 @@ const app = {
         });
 
         // iOS touch scroll — sends PgUp/PgDn to irssi.
-        // Only preventDefault once scroll intent is clear (moved > SCROLL_THRESHOLD px)
-        // so that taps and link clicks are not blocked.
         const termEl = document.getElementById('terminal');
         const SCROLL_THRESHOLD = 8;
         let touchStartY = 0;
@@ -176,24 +171,25 @@ const app = {
 
         const container = document.getElementById('terminal-container');
         const statusBar = document.getElementById('status-bar');
+        const STATUS_H = 50;
 
         if (window.visualViewport) {
             const vv = window.visualViewport;
             const keyboardOpen = vv.height < window.innerHeight * 0.75;
 
+            // Status bar always visible, pinned to bottom of visual viewport
+            statusBar.style.display = 'flex';
+            statusBar.style.position = 'fixed';
+            statusBar.style.left = vv.offsetLeft + 'px';
+            statusBar.style.width = vv.width + 'px';
+            statusBar.style.top = (vv.offsetTop + vv.height - STATUS_H) + 'px';
+
+            // Terminal fills visual viewport above the status bar
             container.style.position = 'fixed';
             container.style.top = vv.offsetTop + 'px';
             container.style.left = vv.offsetLeft + 'px';
             container.style.width = vv.width + 'px';
-            container.style.height = keyboardOpen ? vv.height + 'px' : (vv.height - 50) + 'px';
-
-            statusBar.style.display = keyboardOpen ? 'none' : 'flex';
-            if (!keyboardOpen) {
-                statusBar.style.position = 'fixed';
-                statusBar.style.top = (vv.offsetTop + vv.height - 50) + 'px';
-                statusBar.style.left = vv.offsetLeft + 'px';
-                statusBar.style.width = vv.width + 'px';
-            }
+            container.style.height = (vv.height - STATUS_H) + 'px';
         }
 
         this._fitAddon.fit();
