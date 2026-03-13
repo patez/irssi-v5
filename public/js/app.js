@@ -37,11 +37,19 @@ const app = {
 
         document.getElementById('btn-reset').addEventListener('click', () => this.resetSession());
 
-        // Paste button — only shown on touch devices
-        const btnPaste = document.getElementById('btn-paste');
-        if (btnPaste && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
-            btnPaste.style.display = '';
-            btnPaste.addEventListener('click', () => this._pasteFromClipboard());
+        // Mobile-only buttons
+        const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+        if (isTouchDevice) {
+            const btnPaste = document.getElementById('btn-paste');
+            const btnCtrlC = document.getElementById('btn-ctrlc');
+            if (btnPaste) {
+                btnPaste.style.display = '';
+                btnPaste.addEventListener('click', () => this._pasteFromClipboard());
+            }
+            if (btnCtrlC) {
+                btnCtrlC.style.display = '';
+                btnCtrlC.addEventListener('click', () => this._sendCtrlC());
+            }
         }
 
         this._initTerm();
@@ -56,7 +64,26 @@ const app = {
                 this._ws.send('0' + text);
             }
         } catch (e) {
-            log('paste failed:', e);
+            // First call may fail with a permission error on iOS even after
+            // the user grants access — the permission dialog itself rejects
+            // the promise. Retry once after a short delay.
+            log('paste attempt 1 failed:', e);
+            setTimeout(async () => {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    if (text && this._ws && this._ws.readyState === WebSocket.OPEN) {
+                        this._ws.send('0' + text);
+                    }
+                } catch (e2) {
+                    log('paste attempt 2 failed:', e2);
+                }
+            }, 100);
+        }
+    },
+
+    _sendCtrlC() {
+        if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+            this._ws.send('0\x03');
         }
     },
 
@@ -90,7 +117,7 @@ const app = {
 
         // iOS touch scroll — sends PgUp/PgDn to irssi.
         // Only preventDefault once scroll intent is clear (moved > SCROLL_THRESHOLD px)
-        // so that taps, long-press paste menu, and link clicks are not blocked.
+        // so that taps and link clicks are not blocked.
         const termEl = document.getElementById('terminal');
         const SCROLL_THRESHOLD = 8;
         let touchStartY = 0;
