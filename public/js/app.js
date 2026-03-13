@@ -37,9 +37,27 @@ const app = {
 
         document.getElementById('btn-reset').addEventListener('click', () => this.resetSession());
 
+        // Paste button — only shown on touch devices
+        const btnPaste = document.getElementById('btn-paste');
+        if (btnPaste && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
+            btnPaste.style.display = '';
+            btnPaste.addEventListener('click', () => this._pasteFromClipboard());
+        }
+
         this._initTerm();
         this._setupReconnect();
         await this.loadTerminal();
+    },
+
+    async _pasteFromClipboard() {
+        try {
+            const text = await navigator.clipboard.readText();
+            if (text && this._ws && this._ws.readyState === WebSocket.OPEN) {
+                this._ws.send('0' + text);
+            }
+        } catch (e) {
+            log('paste failed:', e);
+        }
     },
 
     _initTerm() {
@@ -90,7 +108,6 @@ const app = {
             touchAccum += dy;
             touchStartY = e.touches[0].clientY;
 
-            // Lock into scroll mode only after clear vertical intent
             if (!isScrolling && Math.abs(touchAccum) > SCROLL_THRESHOLD) {
                 isScrolling = true;
             }
@@ -158,9 +175,6 @@ const app = {
     },
 
     _setupReconnect() {
-        // iOS Safari kills the WebSocket immediately when the tab goes to
-        // background regardless of how long it was hidden. Mark that we
-        // expect a reconnect so onclose/onerror don't flash "Disconnected".
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
                 this._lastHidden = Date.now();
@@ -172,21 +186,16 @@ const app = {
             }
         });
 
-        // pageshow fires when returning from bfcache (back/forward navigation)
         window.addEventListener('pageshow', (e) => {
             if (e.persisted) this._scheduleReconnect(0);
         });
 
-        // focus fallback for cases visibilitychange doesn't fire
         window.addEventListener('focus', () => {
             if (!this._ws || this._ws.readyState !== WebSocket.OPEN) {
                 this._scheduleReconnect(300);
             }
         });
 
-        // Polling fallback — iOS Safari sometimes fires neither visibilitychange
-        // nor focus reliably after returning from background. Poll every 2s and
-        // reconnect if the tab is visible but the socket is dead.
         setInterval(() => {
             if (!document.hidden && (!this._ws || this._ws.readyState === WebSocket.CLOSED)) {
                 this._scheduleReconnect(0);
