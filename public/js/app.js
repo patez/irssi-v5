@@ -70,21 +70,34 @@ const app = {
             this._ws.send('0' + data);
         });
 
-        // iOS touch scroll — sends PgUp/PgDn to irssi
+        // iOS touch scroll — sends PgUp/PgDn to irssi.
+        // Only preventDefault once scroll intent is clear (moved > SCROLL_THRESHOLD px)
+        // so that taps, long-press paste menu, and link clicks are not blocked.
         const termEl = document.getElementById('terminal');
+        const SCROLL_THRESHOLD = 8;
         let touchStartY = 0;
         let touchAccum = 0;
+        let isScrolling = false;
 
         termEl.addEventListener('touchstart', (e) => {
             touchStartY = e.touches[0].clientY;
             touchAccum = 0;
-            log('touchstart on terminal', e.touches[0].clientY);
+            isScrolling = false;
         }, { passive: true });
 
         termEl.addEventListener('touchmove', (e) => {
             const dy = touchStartY - e.touches[0].clientY;
             touchAccum += dy;
             touchStartY = e.touches[0].clientY;
+
+            // Lock into scroll mode only after clear vertical intent
+            if (!isScrolling && Math.abs(touchAccum) > SCROLL_THRESHOLD) {
+                isScrolling = true;
+            }
+
+            if (!isScrolling) return;
+
+            e.preventDefault();
 
             const lines = Math.trunc(touchAccum / 60);
             if (lines !== 0) {
@@ -96,7 +109,6 @@ const app = {
                     }
                 }
             }
-            e.preventDefault();
         }, { passive: false });
 
         // Resize on container size change
