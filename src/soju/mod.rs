@@ -76,7 +76,7 @@ impl Manager {
         let result = self
             .sojuctl(&[
                 "user", "create",
-                username,
+                "-username", username,
                 "-password", &password,
             ])
             .await;
@@ -88,7 +88,7 @@ impl Manager {
                 // in case it drifted (e.g. manual sojuctl intervention).
                 self.sojuctl(&[
                     "user", "update",
-                    username,
+                    "-username", username,
                     "-password", &password,
                 ])
                 .await
